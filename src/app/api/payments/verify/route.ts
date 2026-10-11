@@ -221,13 +221,27 @@ export async function POST(request: Request) {
       const cardPrefix = bizData?.cardConfig?.prefix || "BIZ";
       const cardNumber = `${cardPrefix}-${tierData?.name?.toUpperCase() || 'STD'}-${new Date().getFullYear()}-${nextSeq.toString().padStart(4, '0')}`;
       
-      const expiryDate = new Date();
-      expiryDate.setFullYear(expiryDate.getFullYear() + 1);
+      const activationDate = new Date();
+      let expiryDateStr = "";
+      
+      // Determine if it's LIFETIME or YEARLY based on planType or name
+      if (tierData?.planType === 'LIFETIME' || tierData?.name?.toUpperCase().includes('LIFETIME')) {
+        expiryDateStr = 'LIFETIME';
+      } else if (tierData?.planType === 'YEARLY' || tierData?.name?.toUpperCase().includes('YEARLY')) {
+        const d = new Date(activationDate);
+        d.setFullYear(d.getFullYear() + 1);
+        expiryDateStr = d.toISOString();
+      } else {
+        // Default behavior for other plans (e.g., if just 'Standard')
+        const d = new Date(activationDate);
+        d.setFullYear(d.getFullYear() + 1);
+        expiryDateStr = d.toISOString();
+      }
 
       transaction.set(membershipRef, {
         id: membershipId, customerId, customerName: orderData?.customerData.name,
         tier: tierData?.name || 'Standard', status: 'active', registrationType: 'Online',
-        startDate: new Date().toISOString(), expiryDate: expiryDate.toISOString(),
+        startDate: activationDate.toISOString(), expiryDate: expiryDateStr,
         cardNumber, rewardPoints: 0, walletBalance: 0,
         pointsMultiplier: parseFloat(tierData?.pointsMultiplier) || 1,
         cashbackPercent: parseFloat(tierData?.cashbackPercent) || 0,

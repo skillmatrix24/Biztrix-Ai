@@ -39,6 +39,13 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useFirestore, useUser, useDoc, useMemoFirebase, updateDocumentNonBlocking, addDocumentNonBlocking, useCollection } from "@/firebase";
 import { doc, serverTimestamp, collection, query, where, getDoc } from "firebase/firestore";
+import { 
+  Select, 
+  SelectContent, 
+  SelectItem, 
+  SelectTrigger, 
+  SelectValue 
+} from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn, getCurrencySymbol } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";

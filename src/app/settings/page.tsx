@@ -61,7 +61,15 @@ function SettingsContent() {
   , [firestore, businessId]);
   const { data: business, isLoading: isBusinessLoading } = useDoc<any>(businessRef);
 
-  const currencySymbol = getCurrencySymbol(business?.currency);
+  const sanitizedBusiness = useMemo(() => {
+    if (!business) return null;
+    return {
+      ...business,
+      trialEndDate: business.trialEndDate?.toDate ? business.trialEndDate.toDate().toISOString() : business.trialEndDate,
+    };
+  }, [business]);
+
+  const currencySymbol = getCurrencySymbol(sanitizedBusiness?.currency);
   
   const isAdmin = useMemo(() => {
     const role = (userProfile?.role || '').toLowerCase();
@@ -83,18 +91,16 @@ function SettingsContent() {
   }, [searchParams]);
   
   const isTrialExpired = useMemo(() => {
-    if (!business) return false;
-    const status = (business.status || '').toLowerCase();
+    if (!sanitizedBusiness) return false;
+    const status = (sanitizedBusiness.status || '').toLowerCase();
     if (status === 'active' || status === 'pro') return false;
     if (status !== 'trial') return false;
-    if (!business.trialEndDate) return false;
+    if (!sanitizedBusiness.trialEndDate) return false;
     
-    const endDate = business.trialEndDate?.toDate 
-      ? business.trialEndDate.toDate() 
-      : (typeof business.trialEndDate === 'string' ? parseISO(business.trialEndDate) : new Date());
+    const endDate = typeof sanitizedBusiness.trialEndDate === 'string' ? parseISO(sanitizedBusiness.trialEndDate) : new Date(sanitizedBusiness.trialEndDate.seconds * 1000);
       
     return differenceInDays(endDate, new Date()) < 0;
-  }, [business]);
+  }, [sanitizedBusiness]);
 
   const handleUpdateBusiness = (data: any) => {
     if (!isAdmin) {
@@ -167,25 +173,25 @@ function SettingsContent() {
         </TabsList>
 
         <TabsContent value="general" className="mt-0 outline-none">
-          <GeneralTab business={business} isAdmin={isAdmin} isTrialExpired={isTrialExpired} onUpdate={handleUpdateBusiness} />
+          <GeneralTab business={sanitizedBusiness} isAdmin={isAdmin} isTrialExpired={isTrialExpired} onUpdate={handleUpdateBusiness} />
         </TabsContent>
 
         <TabsContent value="master" className="mt-0 outline-none">
-          <MasterDataTab business={business} businessRef={businessRef} isAdmin={isAdmin} isTrialExpired={isTrialExpired} />
+          <MasterDataTab business={sanitizedBusiness} businessRef={businessRef} isAdmin={isAdmin} isTrialExpired={isTrialExpired} />
         </TabsContent>
 
         <TabsContent value="tax" className="mt-0 outline-none">
-          <TaxGstTab business={business} businessRef={businessRef} isAdmin={isAdmin} isTrialExpired={isTrialExpired} currencySymbol={currencySymbol} />
+          <TaxGstTab business={sanitizedBusiness} businessRef={businessRef} isAdmin={isAdmin} isTrialExpired={isTrialExpired} currencySymbol={currencySymbol} />
         </TabsContent>
 
         <TabsContent value="payments" className="mt-0 outline-none">
-          <PaymentsTab business={business} businessRef={businessRef} isAdmin={isAdmin} isTrialExpired={isTrialExpired} />
+          <PaymentsTab business={sanitizedBusiness} businessRef={businessRef} isAdmin={isAdmin} isTrialExpired={isTrialExpired} />
         </TabsContent>
 
         <TabsContent value="users" className="mt-0 outline-none">
           <UsersTab 
             businessId={businessId} 
-            business={business}
+            business={sanitizedBusiness}
             businessRef={businessRef}
             businessUsers={businessUsers} 
             currentUser={currentUser} 
@@ -195,11 +201,11 @@ function SettingsContent() {
         </TabsContent>
 
         <TabsContent value="mobile-ui" className="mt-0 outline-none">
-          <MobileUiTab business={business} businessRef={businessRef} isAdmin={isAdmin} />
+          <MobileUiTab business={sanitizedBusiness} businessRef={businessRef} isAdmin={isAdmin} />
         </TabsContent>
 
         <TabsContent value="hardware" className="mt-0 outline-none">
-          <HardwareTab business={business} isAdmin={isAdmin} isTrialExpired={isTrialExpired} onUpdate={handleUpdateBusiness} />
+          <HardwareTab business={sanitizedBusiness} isAdmin={isAdmin} isTrialExpired={isTrialExpired} onUpdate={handleUpdateBusiness} />
         </TabsContent>
       </Tabs>
     </div>

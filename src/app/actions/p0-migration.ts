@@ -217,7 +217,7 @@ export async function getPublicBusinessNode(businessId: string) {
     logoUrl: data.logoUrl,
     faviconUrl: data.faviconUrl,
     activeAddonIds: data.activeAddonIds || [],
-    trialEndDate: data.trialEndDate,
+    trialEndDate: data.trialEndDate ? data.trialEndDate.toDate().toISOString() : null,
     gstMode: data.gstMode || 'exclusive',
     defaultGstRate: data.defaultGstRate || 18,
     cardConfig: data.cardConfig,

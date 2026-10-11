@@ -329,7 +329,7 @@ export default function MemberPublicPortal(props: { params: Promise<{ businessId
         <div className="max-w-6xl mx-auto px-4 w-full flex items-center justify-between">
           <div className="flex items-center gap-3 sm:gap-4 min-w-0 text-left">
             <div className="h-10 w-10 sm:h-12 sm:w-12 bg-white rounded-2xl flex items-center justify-center shadow-xl border border-border/10 shrink-0 overflow-hidden text-left">
-              {business?.logoUrl ? <img src={business.logoUrl} className="h-full w-full object-cover" alt="Logo" /> : <div className="h-full w-full bg-primary flex items-center justify-center text-white font-black text-sm">{business?.name?.charAt(0) || "B"}</div>}
+              {(portalConfig?.logoUrl || business?.logoUrl) ? <img src={portalConfig?.logoUrl || business.logoUrl} className="h-full w-full object-cover" alt="Logo" /> : <div className="h-full w-full bg-primary flex items-center justify-center text-white font-black text-sm">{business?.name?.charAt(0) || "B"}</div>}
             </div>
             <span className="text-sm sm:text-base font-black text-slate-900 uppercase tracking-tighter truncate max-w-[150px]">
               {portalConfig?.storeName || business?.name}
@@ -345,7 +345,7 @@ export default function MemberPublicPortal(props: { params: Promise<{ businessId
         <div className="text-center space-y-10 py-6 sm:py-12 animate-in fade-in duration-1000 text-left sm:text-center">
            <div className="flex flex-col items-center gap-8">
               <div className="relative h-24 w-24 sm:h-32 sm:w-32 bg-white rounded-[2.5rem] flex items-center justify-center shadow-2xl border border-border/10 overflow-hidden">
-                {business?.logoUrl ? <img src={business.logoUrl} className="h-full w-full object-cover" /> : <div className="h-full w-full bg-primary flex items-center justify-center text-white font-black text-4xl">{business?.name?.charAt(0)}</div>}
+                {(portalConfig?.logoUrl || business?.logoUrl) ? <img src={portalConfig?.logoUrl || business.logoUrl} className="h-full w-full object-cover" /> : <div className="h-full w-full bg-primary flex items-center justify-center text-white font-black text-4xl">{business?.name?.charAt(0)}</div>}
               </div>
               <Badge variant="outline" className="h-6 px-4 border-primary/20 bg-primary/5 text-primary text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] rounded-full">
                 <Sparkles className="h-3 w-3 sm:h-3.5 sm:w-3.5 mr-2 fill-current" /> EXCLUSIVE REWARDS PORTAL
