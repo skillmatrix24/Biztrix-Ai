@@ -49,3 +49,9 @@
     @apply bg-background text-foreground font-body;
   }
 }
+
+/* Calendar alignment fixes */
+.rdp {
+  --rdp-cell-size: 40px;
+}
+

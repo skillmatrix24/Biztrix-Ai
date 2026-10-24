@@ -233,7 +233,7 @@ export default function AICommandDashboard() {
                       <div className="space-y-8 sm:space-y-10 animate-in fade-in duration-1000">
                         <p className="text-sm sm:text-base md:text-lg font-medium text-slate-700 leading-relaxed italic text-left">"{brief.summary}"</p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                          {brief.priorityActions.map((action, i) => (
+                          {brief.priorityActions?.map((action, i) => (
                             <div key={i} className="p-4 sm:p-5 bg-muted/20 rounded-2xl sm:rounded-3xl border border-transparent hover:border-primary/20 transition-all group flex flex-col justify-between gap-3 sm:gap-4">
                                <div className="space-y-1.5 sm:space-y-2 text-left">
                                   <div className="flex items-center justify-between"><Badge className={cn("text-[6px] font-black uppercase h-3.5 px-1", action.impact === 'high' ? "bg-red-500 text-white" : "bg-primary text-white")}>{action.impact} Impact</Badge><ArrowUpRight className="h-3 w-3 opacity-20 group-hover:opacity-100 transition-all" /></div>

@@ -35,15 +35,33 @@ const MorningBriefOutputSchema = z.object({
 
 export type MorningBriefOutput = z.infer<typeof MorningBriefOutputSchema>;
 
+function getGreetingByTime(name: string): string {
+    const hour = new Date().getHours();
+    if (hour >= 5 && hour < 12) return `Suprabhat ${name}!`;
+    if (hour >= 12 && hour < 16) return `Namaste ${name}! Aaj ka business update ready hai.`;
+    return `Shubh Sandhya ${name}! Aaj ka business update ready hai.`;
+}
+
 export async function getMorningBrief(input: MorningBriefInput): Promise<MorningBriefOutput> {
+  const timeOfDay = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 16 ? 'afternoon' : 'evening';
+  return morningBriefFlow({ ...input, context: { ...input.context, timeOfDay } });
+}
+
+export async function getMorningBriefLegacy(input: MorningBriefInput): Promise<MorningBriefOutput> {
   return morningBriefFlow(input);
 }
 
 const morningBriefPrompt = ai.definePrompt({
   name: 'morningBriefPrompt',
-  input: { schema: MorningBriefInputSchema },
+  input: { schema: MorningBriefInputSchema.extend({ context: MorningBriefInputSchema.shape.context.extend({ timeOfDay: z.string().optional() }) }) },
   output: { schema: MorningBriefOutputSchema },
-  prompt: `You are the "Biztrix Strategy Advisor". Your goal is to give {{{userName}}} a sateek (precise) morning brief for their business "{{{businessName}}}".
+  prompt: `You are the "Biztrix Strategy Advisor". Your goal is to give {{{userName}}} a sateek (precise) brief for their business "{{{businessName}}}".
+
+**GREETING PROTOCOL:**
+Use time-aware Hinglish greeting based on {{{context.timeOfDay}}}:
+- morning: Suprabhat!
+- afternoon: Namaste!
+- evening: Shubh Sandhya!
 
 **LOGIC PROTOCOL:**
 Only comment on areas where data is provided and relevant modules are active in 'activeAddonIds'.
@@ -83,7 +101,7 @@ Return valid JSON matching the MorningBriefOutputSchema.`,
 const morningBriefFlow = ai.defineFlow(
   {
     name: 'morningBriefFlow',
-    inputSchema: MorningBriefInputSchema,
+    inputSchema: MorningBriefInputSchema.extend({ context: MorningBriefInputSchema.shape.context.extend({ timeOfDay: z.string().optional() }) }),
     outputSchema: MorningBriefOutputSchema,
   },
   async (input) => {
@@ -91,7 +109,7 @@ const morningBriefFlow = ai.defineFlow(
       const { output } = await morningBriefPrompt(input);
       if (output) return output;
     } catch (error) {
-      console.warn('Morning brief AI prompt warning, using contextual fallback:', error);
+      console.error('Morning brief AI prompt failed, falling back to context:', error);
     }
 
     const taskCount = input.context.tasks?.length || 0;
@@ -103,7 +121,7 @@ const morningBriefFlow = ai.defineFlow(
     const isAttention = taskCount > 0 || hotLeadsCount > 0;
 
     return {
-      greeting: `Suprabhat ${input.userName || 'Ji'}! Aaj ka business summary ready hai.`,
+      greeting: getGreetingByTime(input.userName || 'Ji'),
       summary: `${input.businessName || 'Business'} operational status: ${taskCount} urgent tasks, ${lowStockCount} items low on stock, aur ${hotLeadsCount} hot leads active hain.${pendingUdhaar > 0 ? ` Pending udhaar: ₹${pendingUdhaar.toLocaleString('en-IN')}.` : ''}`,
       priorityActions: [
         {

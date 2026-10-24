@@ -142,7 +142,7 @@ export default function LandingPage() {
               <img 
                 src="https://picsum.photos/seed/biztrix-home/1200/800" 
                 alt="Biztrix AI Command Center" 
-                className="w-full h-auto object-cover opacity-95 group-hover:scale-[1.02] transition-transform duration-[2000ms]"
+                className="w-full h-auto object-cover opacity-95 group-hover:scale-[1.02] transition-transform duration-[2s]"
               />
             </div>
           </div>

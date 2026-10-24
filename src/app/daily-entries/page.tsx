@@ -31,8 +31,12 @@ import {
   MessageSquare,
   ChevronUp,
   CornerDownRight,
-  Layout
+  Layout,
+  Calendar as CalendarIcon,
+  FileText
 } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { CustomDateRangePicker } from "@/components/ui/custom-date-range";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,6 +59,17 @@ import {
   DialogTitle, 
   DialogTrigger 
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { 
   Select, 
   SelectContent, 
@@ -75,18 +90,29 @@ import { Label } from "@/components/ui/label";
 import { cn, getCurrencySymbol } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { useFirestore, useCollection, useMemoFirebase, addDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking, useUser, useDoc } from "@/firebase";
-import { collection, query, orderBy, serverTimestamp, doc, where } from "firebase/firestore";
+import { collection, query, orderBy, serverTimestamp, doc, where, limit, runTransaction, increment } from "firebase/firestore";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { subDays, startOfMonth, endOfMonth, isWithinInterval, parseISO, startOfDay, endOfDay, subMonths } from "date-fns";
+import { DateRange } from "react-day-picker";
 import Link from "next/link";
 import { Textarea } from "@/components/ui/textarea";
+import { z } from "zod";
+
+const entrySchema = z.object({
+  type: z.enum(['credit', 'debit']),
+  particulars: z.string().min(1, "Particulars are required"),
+  rate: z.coerce.number().min(0, "Rate must be positive"),
+  qty: z.coerce.number().min(0, "Quantity must be positive"),
+  amount: z.coerce.number().min(0.01, "Amount must be greater than 0"),
+  category: z.string().min(1, "Category is required"),
+});
 
 const FALLBACK_CATEGORIES = ["Sales", "Expense", "Rent", "Salary", "Purchase", "Utility", "Other"];
 const DEFAULT_UNITS = ["pcs", "kg", "box", "packet", "unit", "litre", "meter"];
 const FALLBACK_PARTICULARS = ["Tea & Snacks", "Conveyance", "Office Cleaning", "Stationery Purchase", "Customer Refund"];
 
-type DateFilterType = 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'lastMonth' | 'all';
+type DateFilterType = 'today' | 'yesterday' | 'last7' | 'last30' | 'thisMonth' | 'lastMonth' | 'all' | 'custom';
 
 type DraftEntry = {
   id: string;
@@ -98,6 +124,7 @@ type DraftEntry = {
   amount: number; 
   category: string;
   entryBy: string;
+  vendorName?: string;
   notes: string;
 };
 
@@ -135,28 +162,46 @@ export default function DailyEntriesPage() {
     toast({ title: isPinned ? "Unpinned" : "Pinned", description: `Daily Pulse widget ${isPinned ? 'removed from' : 'added to'} Dashboard.` });
   };
 
+  const vendorsQuery = useMemoFirebase(() => 
+    businessId ? collection(firestore, 'businesses', businessId, 'vendors') : null
+  , [firestore, businessId]);
+
+  const { data: vendorsDataRaw } = useCollection<any>(vendorsQuery);
+  const vendorsData = vendorsDataRaw || [];
+
+  const [isAddVendorOpen, setIsAddVendorOpen] = useState(false);
+  const [newVendorName, setNewVendorName] = useState("");
+  const [newVendorPhone, setNewVendorPhone] = useState("");
+
   const staffQuery = useMemoFirebase(() => 
     businessId ? query(collection(firestore, 'users'), where('businessId', '==', businessId)) : null
   , [firestore, businessId]);
   const { data: staffListData } = useCollection<any>(staffQuery);
   const staffList = staffListData || [];
 
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [pageLimit, setPageLimit] = useState(20);
+  const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
+  const [sortConfig, setSortConfig] = useState<{key: string, direction: 'asc' | 'desc'} | null>(null);
+
   // Real-time Firestore Connection
   const entriesQuery = useMemoFirebase(() => {
     if (!businessId) return null;
     return query(
       collection(firestore, 'businesses', businessId, 'cashbook'),
-      orderBy('createdAt', 'desc')
+      orderBy('createdAt', 'desc'),
+      limit(pageLimit)
     );
-  }, [firestore, businessId]);
+  }, [firestore, businessId, pageLimit]);
   const { data: entriesData, isLoading: isEntriesLoading } = useCollection<any>(entriesQuery);
   const entries = entriesData || [];
 
-  const [searchTerm, setSearchTerm] = useState("");
-  const [isAddOpen, setIsAddOpen] = useState(false);
-  const [dateFilter, setDateFilter] = useState<DateFilterType>('today');
+  const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>(undefined);
   
   const [commonDate, setCommonDate] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<DraftEntry | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [expandedReportRows, setExpandedReportRows] = useState<Record<string, boolean>>({});
   const [draftEntries, setDraftEntries] = useState<DraftEntry[]>([
@@ -188,6 +233,9 @@ export default function DailyEntriesPage() {
         return isWithinInterval(entryDate, { start: startOfMonth(subMonths(now, 1)), end: endOfMonth(subMonths(now, 1)) });
       case 'all':
         return true;
+      case 'custom':
+        if (!customDateRange?.from || !customDateRange?.to) return true;
+        return isWithinInterval(entryDate, { start: startOfDay(customDateRange.from), end: endOfDay(customDateRange.to) });
       default:
         return true;
     }
@@ -204,15 +252,32 @@ export default function DailyEntriesPage() {
   }, [draftEntries]);
 
   const filteredEntries = useMemo(() => {
-    const list = entries || [];
-    return list.filter(e => {
+    let list = entries || [];
+    list = list.filter(e => {
       const matchesSearch = e.category?.toLowerCase().includes(searchTerm.toLowerCase()) || 
                            e.particulars?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                            e.entryBy?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesDate = isDateInRange(e.date, dateFilter);
       return matchesSearch && matchesDate;
     });
-  }, [entries, searchTerm, dateFilter]);
+
+    if (sortConfig) {
+      list.sort((a, b) => {
+        let valA = a[sortConfig.key];
+        let valB = b[sortConfig.key];
+        
+        if (sortConfig.key === 'amount') {
+            valA = parseFloat(valA) || 0;
+            valB = parseFloat(valB) || 0;
+        }
+
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return list;
+  }, [entries, searchTerm, dateFilter, sortConfig]);
 
   const stats = useMemo(() => {
     const list = entries || [];
@@ -276,41 +341,125 @@ export default function DailyEntriesPage() {
     setExpandedReportRows(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const handleSaveBatch = () => {
+  const handleSaveBatch = async () => {
     if (!businessId) return;
-    const validEntries = draftEntries.filter(e => e.amount > 0 && e.particulars);
+    
+    const validEntries = [];
+    for (const entry of draftEntries) {
+        if (!entry.particulars && entry.amount === 0) continue; 
+        
+        const result = entrySchema.safeParse(entry);
+        if (!result.success) {
+            toast({ variant: "destructive", title: "Validation Error", description: `${entry.particulars || 'Entry'}: ${result.error.errors[0].message}` });
+            return;
+        }
+        validEntries.push(result.data);
+    }
+
     if (validEntries.length === 0) {
       toast({ variant: "destructive", title: "Error", description: "Please fill at least one complete entry." });
       return;
     }
 
-    const entriesRef = collection(firestore, 'businesses', businessId, 'cashbook');
-    
-    validEntries.forEach(entry => {
-      addDocumentNonBlocking(entriesRef, {
-        businessId,
-        type: entry.type,
-        particulars: entry.particulars,
-        rate: parseFloat(entry.rate) || 0,
-        qty: parseFloat(entry.qty) || 0,
-        unit: entry.unit,
-        amount: entry.amount,
-        category: entry.category,
-        entryBy: entry.entryBy,
-        notes: entry.notes || "",
-        date: commonDate,
-        createdAt: serverTimestamp()
-      });
-    });
+    try {
+        await runTransaction(firestore, async (transaction) => {
+            const entriesRef = collection(firestore, 'businesses', businessId, 'cashbook');
+            const productsRef = collection(firestore, 'businesses', businessId, 'products');
+            
+            for (const entry of validEntries) {
+                // Find matching product
+                const productSnapshot = await transaction.get(query(productsRef, where('name', '==', entry.particulars), limit(1)));
+                
+                if (!productSnapshot.empty) {
+                    const productDoc = productSnapshot.docs[0];
+                    const productData = productDoc.data();
+                    const qty = Number(entry.qty);
+                    
+                    if (entry.type === 'credit') { // Sale
+                        if ((productData.stock || 0) < qty) {
+                            throw new Error(`Insufficient stock for ${entry.particulars}`);
+                        }
+                        transaction.update(productDoc.ref, { stock: increment(-qty) });
+                    } else { // Purchase
+                        transaction.update(productDoc.ref, { stock: increment(qty) });
+                    }
+                }
+            }
 
-    setIsAddOpen(false);
-    resetForm();
-    toast({ title: "Batch Recorded", description: `Added ${validEntries.length} entries.` });
+            validEntries.forEach(entry => {
+                transaction.set(doc(entriesRef), {
+                    ...entry,
+                    businessId,
+                    entryBy: 'Owner',
+                    notes: "",
+                    date: commonDate,
+                    createdAt: serverTimestamp()
+                });
+            });
+        });
+        setIsAddOpen(false);
+        resetForm();
+        toast({ title: "Batch Recorded", description: `Added ${validEntries.length} entries and updated stock.` });
+    } catch (error) {
+        console.error("Transaction failed:", error);
+        toast({ variant: "destructive", title: "Error", description: "Failed to record batch. Please check stock levels." });
+    }
   };
 
   const resetForm = () => {
     setDraftEntries([{ id: '1', type: 'credit', particulars: '', rate: '', qty: '', unit: dynamicUnits[0] || 'pcs', amount: 0, category: dynamicCategories[0] || 'Sales', entryBy: 'Owner', notes: '' }]);
     setExpandedRows({});
+  };
+
+  const handleDelete = () => {
+    if (!deleteTarget || !businessId) return;
+    const docRef = doc(firestore, 'businesses', businessId, 'cashbook', deleteTarget);
+    deleteDocumentNonBlocking(docRef);
+    setDeleteTarget(null);
+    toast({ title: "Deleted", description: "Entry removed successfully." });
+  };
+
+  const handleUpdate = () => {
+    if (!editTarget || !businessId) return;
+
+    const result = entrySchema.safeParse(editTarget);
+    if (!result.success) {
+        toast({ variant: "destructive", title: "Validation Error", description: result.error.errors[0].message });
+        return;
+    }
+    
+    const docRef = doc(firestore, 'businesses', businessId, 'cashbook', editTarget.id);
+    updateDocumentNonBlocking(docRef, {
+        ...result.data,
+        notes: editTarget.notes || "",
+    });
+    setEditTarget(null);
+    toast({ title: "Updated", description: "Entry updated successfully." });
+  };
+
+  const handleExport = () => {
+    if (filteredEntries.length === 0) return;
+    const headers = ["Date", "Particulars", "Type", "Amount", "Category", "Entry By"];
+    const csvContent = [
+      headers.join(","),
+      ...filteredEntries.map(e => [
+        e.date,
+        `"${e.particulars.replace(/"/g, '""')}"`,
+        e.type,
+        e.amount,
+        e.category,
+        e.entryBy
+      ].join(","))
+    ].join("\n");
+    
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cashbook_export_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+    toast({ title: "Exported", description: "Data exported to CSV successfully." });
   };
 
   const getDateLabel = () => {
@@ -323,6 +472,7 @@ export default function DailyEntriesPage() {
       case 'thisMonth': return 'This Month';
       case 'lastMonth': return 'Last Month';
       case 'all': return 'Full History';
+      case 'custom': return customDateRange?.from ? `${customDateRange.from.toLocaleDateString('en-IN', {day:'numeric', month:'short'})} - ${customDateRange.to?.toLocaleDateString('en-IN', {day:'numeric', month:'short'}) || '...'}` : 'Select Range';
       default: return 'Filter Date';
     }
   };
@@ -362,10 +512,39 @@ export default function DailyEntriesPage() {
                   <DropdownMenuLabel className="text-[8px] font-black uppercase tracking-widest p-2 opacity-40">Select Window</DropdownMenuLabel>
                   <DropdownMenuItem onClick={() => setDateFilter('today')} className="text-xs font-bold uppercase p-3 cursor-pointer rounded-xl">Today</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setDateFilter('yesterday')} className="text-xs font-bold uppercase p-3 cursor-pointer rounded-xl">Yesterday</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDateFilter('last7')} className="text-xs font-bold uppercase p-3 cursor-pointer rounded-xl">Last 7 Days</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDateFilter('last30')} className="text-xs font-bold uppercase p-3 cursor-pointer rounded-xl">Last 30 Days</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDateFilter('thisMonth')} className="text-xs font-bold uppercase p-3 cursor-pointer rounded-xl">This Month</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setDateFilter('lastMonth')} className="text-xs font-bold uppercase p-3 cursor-pointer rounded-xl">Last Month</DropdownMenuItem>
                   <Separator className="my-1" />
                   <DropdownMenuItem onClick={() => setDateFilter('all')} className="text-xs font-bold uppercase p-3 cursor-pointer text-primary rounded-xl">Full History</DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+
+              <Popover>
+                <PopoverTrigger asChild>
+                    <Button variant="outline" className="h-11 px-4 font-black text-[10px] uppercase tracking-wider bg-white shadow-sm border-primary/10 text-primary rounded-xl">
+                        <CalendarIcon className="mr-2 h-3.5 w-3.5" /> Range <ChevronDown className="ml-2 h-3.5 w-3.5" />
+                    </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="end">
+                    <CustomDateRangePicker
+                        value={{
+                            startDate: customDateRange?.from || new Date(),
+                            endDate: customDateRange?.to || new Date(),
+                            key: 'selection'
+                        }}
+                        onChange={(range) => {
+                            setCustomDateRange({ from: range.startDate, to: range.endDate });
+                            if (range.startDate && range.endDate) setDateFilter('custom');
+                        }}
+                    />
+                </PopoverContent>
+              </Popover>
+
+              <Button variant="outline" onClick={handleExport} className="h-11 px-4 font-black text-[10px] uppercase tracking-wider bg-white shadow-sm border-primary/10 text-primary rounded-xl">
+                  <FileText className="mr-2 h-3.5 w-3.5" /> Export
+              </Button>
 
               <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
                 <DialogTrigger asChild>
@@ -394,9 +573,10 @@ export default function DailyEntriesPage() {
                   
                   <ScrollArea className="flex-1 overflow-y-auto">
                     <div className="p-4 lg:p-0 min-h-full pb-10">
-                      <div className="hidden lg:grid grid-cols-[100px_1fr_120px_100px_120px_140px_140px_140px_100px] gap-2 p-4 bg-muted/50 sticky top-0 z-10 text-[10px] font-black uppercase tracking-widest text-muted-foreground border-b">
+                      <div className="hidden lg:grid grid-cols-[100px_1fr_120px_100px_120px_120px_140px_140px_140px_100px] gap-2 p-4 bg-muted/50 sticky top-0 z-10 text-[10px] font-black uppercase tracking-widest text-muted-foreground border-b">
                         <div>Type</div>
                         <div>Particulars</div>
+                        <div className="text-center">Vendor</div>
                         <div className="text-center">Rate ({currencySymbol})</div>
                         <div className="text-center">Qty</div>
                         <div>Unit</div>
@@ -409,7 +589,7 @@ export default function DailyEntriesPage() {
                       <div className="divide-y divide-border">
                         {draftEntries.map((entry, idx) => (
                           <div key={entry.id} className="group/row">
-                            <div className="p-4 lg:p-3 lg:grid lg:grid-cols-[100px_1fr_120px_100px_120px_140px_140px_140px_100px] lg:gap-2 items-center hover:bg-muted/5 transition-all">
+                            <div className="p-4 lg:p-3 lg:grid lg:grid-cols-[100px_1fr_120px_120px_100px_120px_140px_140px_140px_100px] lg:gap-2 items-center hover:bg-muted/5 transition-all">
                               <div className="lg:hidden flex items-center justify-between mb-4">
                                 <div className="flex items-center gap-2">
                                   <Badge variant="secondary" className="text-[8px] font-black uppercase bg-primary/10 text-primary border-none h-4">Entry #{idx + 1}</Badge>
@@ -468,6 +648,24 @@ export default function DailyEntriesPage() {
                                     </DropdownMenu>
                                   </div>
                                 </div>
+
+                                {entry.type === 'debit' ? (
+                                  <div className="col-span-2 lg:col-span-1">
+                                    <Label className="lg:hidden text-[9px] font-black uppercase text-muted-foreground mb-1 block">Vendor</Label>
+                                    <Select value={entry.vendorName} onValueChange={(v) => updateRow(entry.id, 'vendorName', v)}>
+                                      <SelectTrigger className="h-10 text-[10px] font-bold uppercase border-none bg-muted/20 rounded-xl shadow-sm"><SelectValue placeholder="Select Vendor"/></SelectTrigger>
+                                      <SelectContent className="rounded-xl">
+                                        {(vendorsData || []).map((vendor: any) => <SelectItem key={vendor.id} value={vendor.name} className="text-[10px] uppercase font-bold">{vendor.name}</SelectItem>)}
+                                        <SelectSeparator />
+                                        <Button variant="ghost" className="w-full h-8 justify-start gap-2 text-[9px] font-black uppercase text-primary hover:bg-primary/5" onClick={() => setIsAddVendorOpen(true)}>
+                                          <PlusCircle className="h-3 w-3 mr-1" /> Add New Vendor
+                                        </Button>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                ) : (
+                                  <div className="hidden lg:block"></div>
+                                )}
 
                                 <div className="space-y-1">
                                   <Label className="lg:hidden text-[9px] font-black uppercase text-muted-foreground mb-1 block">Rate ({currencySymbol})</Label>
@@ -636,12 +834,13 @@ export default function DailyEntriesPage() {
           <Table className="min-w-[1100px]">
             <TableHeader>
               <TableRow className="bg-muted/10">
-                <TableHead className="text-[10px] font-black uppercase pl-8 h-12">Date</TableHead>
-                <TableHead className="text-[10px] font-black uppercase h-12">Particulars</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-center h-12">Rate × Qty</TableHead>
+                <TableHead className="text-[10px] font-black uppercase pl-8 h-12 cursor-pointer hover:text-primary" onClick={() => setSortConfig({key: 'date', direction: sortConfig?.key === 'date' && sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>Date {sortConfig?.key === 'date' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</TableHead>
+                <TableHead className="text-[10px] font-black uppercase h-12 cursor-pointer hover:text-primary" onClick={() => setSortConfig({key: 'particulars', direction: sortConfig?.key === 'particulars' && sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>Particulars {sortConfig?.key === 'particulars' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-center h-12 cursor-pointer hover:text-primary" onClick={() => setSortConfig({key: 'amount', direction: sortConfig?.key === 'amount' && sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>Amount {sortConfig?.key === 'amount' && (sortConfig.direction === 'asc' ? '↑' : '↓')}</TableHead>
                 <TableHead className="text-[10px] font-black uppercase h-12">Category</TableHead>
                 <TableHead className="text-right text-[10px] font-black uppercase h-12">Inflow (+)</TableHead>
                 <TableHead className="text-right text-[10px] font-black uppercase pr-8 h-12">Outflow (-)</TableHead>
+                <TableHead className="text-center text-[10px] font-black uppercase h-12">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -672,6 +871,16 @@ export default function DailyEntriesPage() {
                       <TableCell><Badge variant="outline" className="text-[8px] font-black uppercase h-4 px-1.5 border-primary/10 text-primary bg-primary/5">{entry.category}</Badge></TableCell>
                       <TableCell className="text-right font-black text-sm text-green-600">{entry.type === 'credit' ? `${currencySymbol}${entry.amount.toLocaleString()}` : '-'}</TableCell>
                       <TableCell className="text-right font-black text-sm text-destructive pr-8">{entry.type === 'debit' ? `${currencySymbol}${entry.amount.toLocaleString()}` : '-'}</TableCell>
+                      <TableCell className="text-center">
+                        <div className="flex justify-center gap-2">
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-full" onClick={() => setEditTarget({...entry, rate: entry.rate.toString(), qty: entry.qty.toString()})}>
+                            <Edit2 className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive/50 hover:text-destructive hover:bg-destructive/10 rounded-full" onClick={() => setDeleteTarget(entry.id)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                     {expandedReportRows[entry.id] && entry.notes && (
                       <TableRow className="bg-muted/5 animate-in slide-in-from-top-1">
@@ -691,6 +900,9 @@ export default function DailyEntriesPage() {
               )}
             </TableBody>
           </Table>
+          <div className="p-4 flex justify-center">
+            <Button variant="outline" onClick={() => setPageLimit(prev => prev + 20)} className="rounded-xl font-black uppercase tracking-widest text-xs">Load More</Button>
+          </div>
         </div>
 
         <div className="md:hidden divide-y divide-border">
@@ -740,12 +952,105 @@ export default function DailyEntriesPage() {
                 <div className="flex items-center justify-between bg-muted/20 p-2.5 rounded-xl border border-transparent">
                   <span className="text-[9px] font-black text-slate-400 uppercase">Rate: {currencySymbol}{entry.rate} × {entry.qty} {entry.unit}</span>
                   <span className="text-[9px] font-black text-slate-400 uppercase">By: {entry.entryBy || 'Owner'}</span>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/50 hover:text-destructive hover:bg-destructive/10 rounded-full" onClick={() => setDeleteTarget(entry.id)}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-blue-500 hover:text-blue-600 hover:bg-blue-50 rounded-full" onClick={() => setEditTarget({...entry, rate: entry.rate.toString(), qty: entry.qty.toString()})}>
+                    <Edit2 className="h-3 w-3" />
+                  </Button>
                 </div>
               </div>
             ))
           )}
+          <div className="p-4">
+              <Button variant="outline" onClick={() => setPageLimit(prev => prev + 20)} className="w-full rounded-xl font-black uppercase tracking-widest text-xs">Load More</Button>
+          </div>
         </div>
       </Card>
+      <AlertDialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
+        <AlertDialogContent className="rounded-2xl border-none shadow-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-black uppercase tracking-widest text-lg">Confirm Deletion</AlertDialogTitle>
+            <AlertDialogDescription className="font-bold text-muted-foreground">This action cannot be undone. Are you sure you want to permanently remove this entry?</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-xl font-black uppercase tracking-widest">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-destructive hover:bg-destructive/90 rounded-xl font-black uppercase tracking-widest">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={!!editTarget} onOpenChange={() => setEditTarget(null)}>
+        <DialogContent className="rounded-2xl border-none shadow-2xl max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-black uppercase tracking-widest text-lg">Edit Entry</DialogTitle>
+          </DialogHeader>
+          {editTarget && (
+            <div className="space-y-4 pt-4">
+              <div className="space-y-1.5">
+                <Label>Particulars</Label>
+                <Input value={editTarget.particulars} onChange={(e) => setEditTarget({...editTarget, particulars: e.target.value})} className="rounded-xl"/>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                    <Label>Rate</Label>
+                    <Input type="number" value={editTarget.rate} onChange={(e) => {
+                        const rate = parseFloat(e.target.value) || 0;
+                        const qty = parseFloat(editTarget.qty) || 0;
+                        setEditTarget({...editTarget, rate: e.target.value, amount: rate * qty});
+                    }} className="rounded-xl"/>
+                </div>
+                <div className="space-y-1.5">
+                    <Label>Qty</Label>
+                    <Input type="number" value={editTarget.qty} onChange={(e) => {
+                        const rate = parseFloat(editTarget.rate) || 0;
+                        const qty = parseFloat(e.target.value) || 0;
+                        setEditTarget({...editTarget, qty: e.target.value, amount: rate * qty});
+                    }} className="rounded-xl"/>
+                </div>
+              </div>
+               <div className="space-y-1.5">
+                <Label>Notes</Label>
+                <Textarea value={editTarget.notes} onChange={(e) => setEditTarget({...editTarget, notes: e.target.value})} className="rounded-xl"/>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="pt-4">
+            <Button variant="outline" onClick={() => setEditTarget(null)} className="rounded-xl font-black uppercase tracking-widest">Cancel</Button>
+            <Button onClick={handleUpdate} className="bg-primary hover:bg-primary/90 rounded-xl font-black uppercase tracking-widest">Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isAddVendorOpen} onOpenChange={setIsAddVendorOpen}>
+        <DialogContent className="rounded-2xl border-none shadow-2xl max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-black uppercase tracking-widest text-lg">Register Supplier Node</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-4 pt-4">
+            <div className="space-y-1.5"><Label>Full Name *</Label><Input value={newVendorName} onChange={(e) => setNewVendorName(e.target.value)} className="rounded-xl"/></div>
+            <div className="space-y-1.5"><Label>WhatsApp *</Label><Input value={newVendorPhone} onChange={(e) => setNewVendorPhone(e.target.value)} className="rounded-xl"/></div>
+            <div className="space-y-1.5"><Label>Business Identity</Label><Input placeholder="Business Name" className="rounded-xl"/></div>
+            <div className="space-y-1.5"><Label>GSTIN</Label><Input placeholder="GSTIN" className="rounded-xl"/></div>
+            <div className="col-span-2 space-y-1.5"><Label>Billing Address</Label><Textarea placeholder="Address" className="rounded-xl"/></div>
+            <div className="col-span-2 space-y-1.5"><Label>Opening Dues (₹)</Label><Input type="number" defaultValue="0" className="rounded-xl"/></div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => {
+                if(!businessId || !newVendorName) return;
+                addDocumentNonBlocking(collection(firestore, 'businesses', businessId, 'vendors'), {
+                    name: newVendorName,
+                    phone: newVendorPhone,
+                    createdAt: serverTimestamp()
+                });
+                setIsAddVendorOpen(false);
+                setNewVendorName("");
+                setNewVendorPhone("");
+                toast({ title: "Vendor Added", description: `${newVendorName} added successfully.` });
+            }} className="w-full bg-primary hover:bg-primary/90 rounded-xl font-black uppercase tracking-widest h-12">ESTABLISH SUPPLY NODE</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
